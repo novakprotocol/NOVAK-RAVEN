@@ -28,7 +28,7 @@ func main(){
     logger:=log.New(os.Stdout,"",0)
     for{
         atomic.AddUint64(&heartbeat,1)
-        logger.Println(time.Now().UTC().Format(time.RFC3339),"hello Novak v6 v2",version)
+        logger.Println(time.Now().UTC().Format(time.RFC3339),"hello Novak v7 dev
         time.Sleep(5*time.Second)
     }
 }
