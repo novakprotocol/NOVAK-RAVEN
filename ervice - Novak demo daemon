@@ -1,0 +1,10 @@
+Dec 25 17:43:39 RAVEN systemd[1]: [0;1;38;5;185m[0;1;39m[0;1;38;5;185mnovakd.service: Failed with result 'exit-code'.[0m
+Dec 25 17:43:39 RAVEN systemd[1]: novakd.service: Scheduled restart job, restart counter is at 5.
+Dec 25 17:43:39 RAVEN systemd[1]: [0;1;38;5;185m[0;1;39m[0;1;38;5;185mnovakd.service: Start request repeated too quickly.[0m
+Dec 25 17:43:39 RAVEN systemd[1]: [0;1;38;5;185m[0;1;39m[0;1;38;5;185mnovakd.service: Failed with result 'exit-code'.[0m
+Dec 25 17:43:39 RAVEN systemd[1]: [0;1;31m[0;1;39m[0;1;31mFailed to start novakd.service - Novak demo daemon.[0m
+Dec 25 17:59:28 RAVEN systemd[1]: Started novakd.service - Novak demo daemon.
+Dec 25 18:01:50 RAVEN systemd[1]: Stopping novakd.service - Novak demo daemon...
+Dec 25 18:01:50 RAVEN systemd[1]: novakd.service: Deactivated successfully.
+Dec 25 18:01:50 RAVEN systemd[1]: Stopped novakd.service - Novak demo daemon.
+Dec 25 18:01:58 RAVEN systemd[1]: Started novakd.service - Novak demo daemon.

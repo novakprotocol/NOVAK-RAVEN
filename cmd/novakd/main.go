@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"crypto/sha512"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -10,17 +11,25 @@ import (
 	"sync/atomic"
 	"time"
 
+	"novak/pkg/chain"
+	"novak/pkg/eir"
+	"novak/pkg/hvet"
+	"novak/pkg/rgac"
+
 	blake3 "lukechampine.com/blake3"
 )
 
-// global counters
 var (
+	merkle       *chain.Chain
+	rc           rgac.Chain
 	heartbeat    uint64
 	pqcRotations uint64
+	eirTotal     uint64
+	hvetTotal    uint64
+	rgacTotal    uint64
 	version      = "dev"
 )
 
-// ---- Hashing benchmark ----
 func hashAll(data []byte) map[string]string {
 	out := make(map[string]string)
 	h256 := sha256.Sum256(data)
@@ -34,12 +43,15 @@ func hashAll(data []byte) map[string]string {
 	return out
 }
 
-// ---- HTTP handlers ----
 func metrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	fmt.Fprintf(w, "novak_heartbeat_total %d\n", atomic.LoadUint64(&heartbeat))
 	fmt.Fprintf(w, "novak_build_info{version=%q} 1\n", version)
 	fmt.Fprintf(w, "pqc_rotations_total %d\n", atomic.LoadUint64(&pqcRotations))
+	fmt.Fprintf(w, "novak_merkle_depth %d\n", merkle.Depth())
+	fmt.Fprintf(w, "novak_eir_appends_total %d\n", atomic.LoadUint64(&eirTotal))
+	fmt.Fprintf(w, "novak_hvet_compute_total %d\n", atomic.LoadUint64(&hvetTotal))
+	fmt.Fprintf(w, "novak_rgac_append_total %d\n", atomic.LoadUint64(&rgacTotal))
 }
 
 func health(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +59,6 @@ func health(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("ok"))
 }
 
-// quick benchmark endpoint
 func hashbench(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	data := []byte(time.Now().UTC().String())
@@ -59,20 +70,55 @@ func hashbench(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// PQC rotation metric endpoint
 func showpqc(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "pqc_rotations_total %d\n", atomic.LoadUint64(&pqcRotations))
 }
 
+// /record accepts {"R":"...","D":"...","O":"..."} and appends EIR→HVET→RGAC→Merkle
+func record(w http.ResponseWriter, r *http.Request) {
+	var p struct{ R, D, O string }
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	e := eir.New(p.R, p.D, p.O)
+	atomic.AddUint64(&eirTotal, 1)
+
+	h := hvet.Compute(e.JSON())
+	atomic.AddUint64(&hvetTotal, 1)
+
+	head := rc.Append(h["sha256"])
+	atomic.AddUint64(&rgacTotal, 1)
+
+	merkle.Append(e.JSON()) // persisted at /var/lib/novak/chain.json
+	fmt.Fprintf(w, "recorded head %s\n", head)
+}
+
 func main() {
+	// init merkle ledger file (persists to /var/lib/novak/chain.json)
+	var err error
+	merkle, err = chain.New("/var/lib/novak/chain.json")
+	if err != nil {
+		log.Fatalf("ledger init: %v", err)
+	}
+
+	// seed: proof of boot
+	e := eir.New("system", "startup", "boot")
+	h := hvet.Compute(e.JSON())
+	rc.Append(h["sha256"])
+	merkle.Append(e.JSON())
+	atomic.AddUint64(&eirTotal, 1)
+	atomic.AddUint64(&hvetTotal, 1)
+	atomic.AddUint64(&rgacTotal, 1)
+
 	logger := log.New(os.Stdout, "", 0)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", health)
 	mux.HandleFunc("/metrics", metrics)
 	mux.HandleFunc("/hashbench", hashbench)
 	mux.HandleFunc("/showpqc", showpqc)
+	mux.HandleFunc("/record", record)
 
-	// start HTTP listener
 	go func() {
 		logger.Println("HTTP :9105 up")
 		if err := http.ListenAndServe(":9105", mux); err != nil {
@@ -81,18 +127,16 @@ func main() {
 	}()
 
 	// heartbeat + simulated PQC key rotation
-	pqcTicker := time.NewTicker(30 * time.Second) // rotate every 30 s
-	defer pqcTicker.Stop()
-
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-time.After(5 * time.Second):
 			atomic.AddUint64(&heartbeat, 1)
-			logger.Println(time.Now().UTC().Format(time.RFC3339), "hello Novak PRO build", version)
-		case <-pqcTicker.C:
+			logger.Println(time.Now().UTC().Format(time.RFC3339), "heartbeat", version)
+		case <-ticker.C:
 			atomic.AddUint64(&pqcRotations, 1)
 			logger.Println(time.Now().UTC().Format(time.RFC3339), "PQC rotation complete")
 		}
 	}
 }
-// force rebuild Thu Dec 25 06:01:28 PM UTC 2025

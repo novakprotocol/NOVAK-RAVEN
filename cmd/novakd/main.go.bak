@@ -1,0 +1,98 @@
+package main
+
+import (
+	"crypto/sha256"
+	"crypto/sha512"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"sync/atomic"
+	"time"
+
+	blake3 "lukechampine.com/blake3"
+)
+
+// global counters
+var (
+	heartbeat    uint64
+	pqcRotations uint64
+	version      = "dev"
+)
+
+// ---- Hashing benchmark ----
+func hashAll(data []byte) map[string]string {
+	out := make(map[string]string)
+	h256 := sha256.Sum256(data)
+	h384 := sha512.Sum384(data)
+	h512 := sha512.Sum512(data)
+	h3 := blake3.Sum256(data)
+	out["sha256"] = fmt.Sprintf("%x", h256)
+	out["sha384"] = fmt.Sprintf("%x", h384)
+	out["sha512"] = fmt.Sprintf("%x", h512)
+	out["blake3"] = fmt.Sprintf("%x", h3)
+	return out
+}
+
+// ---- HTTP handlers ----
+func metrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	fmt.Fprintf(w, "novak_heartbeat_total %d\n", atomic.LoadUint64(&heartbeat))
+	fmt.Fprintf(w, "novak_build_info{version=%q} 1\n", version)
+	fmt.Fprintf(w, "pqc_rotations_total %d\n", atomic.LoadUint64(&pqcRotations))
+}
+
+func health(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("ok"))
+}
+
+// quick benchmark endpoint
+func hashbench(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	data := []byte(time.Now().UTC().String())
+	results := hashAll(data)
+	elapsed := time.Since(start)
+	fmt.Fprintf(w, "# elapsed_ms %.3f\n", float64(elapsed.Microseconds())/1000)
+	for k, v := range results {
+		fmt.Fprintf(w, "%s %s\n", k, v)
+	}
+}
+
+// PQC rotation metric endpoint
+func showpqc(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "pqc_rotations_total %d\n", atomic.LoadUint64(&pqcRotations))
+}
+
+func main() {
+	logger := log.New(os.Stdout, "", 0)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", health)
+	mux.HandleFunc("/metrics", metrics)
+	mux.HandleFunc("/hashbench", hashbench)
+	mux.HandleFunc("/showpqc", showpqc)
+
+	// start HTTP listener
+	go func() {
+		logger.Println("HTTP :9105 up")
+		if err := http.ListenAndServe(":9105", mux); err != nil {
+			logger.Fatalf("http: %v", err)
+		}
+	}()
+
+	// heartbeat + simulated PQC key rotation
+	pqcTicker := time.NewTicker(30 * time.Second) // rotate every 30 s
+	defer pqcTicker.Stop()
+
+	for {
+		select {
+		case <-time.After(5 * time.Second):
+			atomic.AddUint64(&heartbeat, 1)
+			logger.Println(time.Now().UTC().Format(time.RFC3339), "hello Novak PRO build", version)
+		case <-pqcTicker.C:
+			atomic.AddUint64(&pqcRotations, 1)
+			logger.Println(time.Now().UTC().Format(time.RFC3339), "PQC rotation complete")
+		}
+	}
+}
+// force rebuild Thu Dec 25 06:01:28 PM UTC 2025
